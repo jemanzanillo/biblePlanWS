@@ -1,0 +1,18 @@
+# --- Dependencias (No subir, pesan mucho) ---
+node_modules/
+
+# --- Seguridad (¡CRÍTICO! Contiene tus números) ---
+.env
+
+# --- Sesión de WhatsApp ---
+# Esto contiene tus credenciales de acceso.
+# Es mejor no subirlo a GitHub para evitar que alguien más use tu sesión.
+.wwebjs_auth/
+.wwebjs_cache/
+
+# --- Logs y archivos de sistema ---
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db

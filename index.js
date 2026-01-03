@@ -1,3 +1,4 @@
+require('dotenv').config();
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
@@ -40,7 +41,7 @@ client.on('ready', () => {
 // Programar envío: Todos los días a las 8:00 AM hora servidor
     // Nota: Render usa hora UTC (Londres). 8:00 AM UTC son las 4:00 AM en Rep. Dom.
     // Si quieres que sea a las 8 AM RD, pon '0 12 * * *' (12:00 UTC)
-    cron.schedule('0 12 * * *', () => { 
+    cron.schedule('0 10 * * *', () => { 
         enviarLecturaDiaria();
     });
 });
@@ -73,15 +74,17 @@ async function enviarLecturaDiaria() {
                             `🔜 *Mañana (${claveManana}):* ${lecturaManana}\n\n` +
                             `_¡Que tengas un bendecido día!_`;
         
-        // --- LISTA DE NÚMEROS A ENVIAR ---
-            // Agrega aquí los dos números con el formato correcto (código país + número + @c.us)
+            // --- LISTA DE NÚMEROS A ENVIAR (SEGURO) ---
+            // Ahora leemos desde las variables de entorno
             const destinatarios = [
-                '14234649896@c.us', // Engel
-                // '18299415959@c.us'  // Franchesca
+                process.env.NUMERO_UNO,
+                process.env.NUMERO_DOS
             ];
-        
-        for (const numero of destinatarios) {
-                        await client.sendMessage(numero, mensaje);
+
+        const destinatariosValidos = destinatarios.filter(n => n !== undefined);
+          
+        for (const numero of destinatariosValidos) {
+                    await client.sendMessage(numero, mensaje);
                         console.log(`Mensaje enviado a ${numero}`);
                         // Esperamos 2 segundos entre mensajes para que WhatsApp no lo detecte como spam rápido
                         await new Promise(resolve => setTimeout(resolve, 2000));
@@ -91,5 +94,6 @@ async function enviarLecturaDiaria() {
                 console.error('Error enviando mensaje:', error);
             }
         }
+
 
 client.initialize();

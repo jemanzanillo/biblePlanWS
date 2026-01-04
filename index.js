@@ -1,22 +1,47 @@
 require('dotenv').config();
 const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const cron = require('node-cron');
 const express = require('express');
+const qrcode = require('qrcode'); // Librería nueva para web
+
+
 
 // --- CONFIGURACIÓN PARA RENDER (SERVIDOR WEB) ---
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Variable global para guardar el QR actual
+let qrCodeImage = null;
+
+// --- SERVIDOR WEB ---
 app.get('/', (req, res) => {
-  res.send('El bot está vivo y corriendo.');
+  res.send('El bot está vivo. Ve a /qr para escanear.');
+});
+
+// Ruta especial para ver el QR en el navegador
+app.get('/qr', async (req, res) => {
+    if (qrCodeImage) {
+        // Muestra el QR como una imagen HTML
+        res.send(`
+            <html>
+                <head><meta http-equiv="refresh" content="20"></head> <body style="display:flex; justify-content:center; align-items:center; height:100vh; background:#f0f0f0;">
+                    <div style="text-align:center;">
+                        <h1>Escanea con WhatsApp</h1>
+                        <img src="${qrCodeImage}" style="border:10px solid white; box-shadow: 0 4px 8px rgba(0,0,0,0.1);" />
+                        <p>Si cambia, la página se recargará sola.</p>
+                    </div>
+                </body>
+            </html>
+        `);
+    } else {
+        res.send('<h1>⏳ Esperando código QR... o ya está conectado.</h1>');
+    }
 });
 
 app.listen(port, () => {
-  console.log(`Servidor web escuchando en el puerto ${port}`);
+  console.log(`Servidor web listo en puerto ${port}`);
 });
-//
 
 
 
@@ -24,19 +49,25 @@ app.listen(port, () => {
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
-        // Estos argumentos son OBLIGATORIOS para correr en Render/Linux
         args: ['--no-sandbox', '--disable-setuid-sandbox']
     }
 });
 
 client.on('qr', (qr) => {
-    // En la nube no podemos ver la terminal tan fácil, así que imprimimos el QR en texto
-    console.log('QR RECIBIDO (Mira los logs de Render para escanearlo):', qr);
-    qrcode.generate(qr, { small: true });
+    // Convertimos el código de texto a una imagen Data URL para mostrar en la web
+    qrcode.toDataURL(qr, (err, url) => {
+        if (err) {
+            console.error('Error generando QR web', err);
+            return;
+        }
+        qrCodeImage = url; // Guardamos la imagen
+        console.log('Nuevo QR generado. Abre tu web en /qr para verlo.');
+    });
 });
 
 client.on('ready', () => {
     console.log('¡Bot conectado con éxito!');
+    qrCodeImage = null; // Borramos el QR porque ya no hace falta
 
 // Programar envío: Todos los días a las 8:00 AM hora servidor
     // Nota: Render usa hora UTC (Londres). 8:00 AM UTC son las 4:00 AM en Rep. Dom.
@@ -80,20 +111,17 @@ async function enviarLecturaDiaria() {
                 process.env.NUMERO_UNO,
                 process.env.NUMERO_DOS
             ];
+            const validos = destinatarios.filter(n => n);
 
-        const destinatariosValidos = destinatarios.filter(n => n !== undefined);
-          
-        for (const numero of destinatariosValidos) {
-                    await client.sendMessage(numero, mensaje);
-                        console.log(`Mensaje enviado a ${numero}`);
-                        // Esperamos 2 segundos entre mensajes para que WhatsApp no lo detecte como spam rápido
-                        await new Promise(resolve => setTimeout(resolve, 2000));
-                    }
-                }
-            } catch (error) {
-                console.error('Error enviando mensaje:', error);
+            for (const numero of validos) {
+                await client.sendMessage(numero, mensaje);
+                console.log(`Enviado a ${numero}`);
+                await new Promise(r => setTimeout(r, 2000));
             }
         }
-
+    } catch (error) {
+        console.error('Error enviando:', error);
+    }
+}
 
 client.initialize();

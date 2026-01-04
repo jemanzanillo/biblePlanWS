@@ -20,5 +20,4 @@ COPY . .
 
 EXPOSE 3000
 
-
-CMD [ "node", "--max-old-space-size=400", "index.js" ]
+CMD [ "node", "index.js" ]

@@ -49,7 +49,17 @@ app.listen(port, () => {
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        headless: true, // Obligatorio
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas', // Desactiva gráficos avanzados
+            '--no-first-run',
+            '--no-zygote',
+            '--single-process', // Ahorra mucha RAM (aunque es menos estable, es necesario aquí)
+            '--disable-gpu' // Imprescindible en servidores sin tarjeta gráfica
+        ]
     }
 });
 
@@ -126,3 +136,4 @@ async function enviarLecturaDiaria() {
 
 
 client.initialize();
+

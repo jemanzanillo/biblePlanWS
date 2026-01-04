@@ -16,7 +16,8 @@ let qrCodeImage = null;
 
 // --- SERVIDOR WEB ---
 app.get('/', (req, res) => {
-  res.send('El bot está vivo. Ve a /qr para escanear.');
+    const ahora = new Date().toLocaleString("en-US", {timeZone: "America/Santo_Domingo"});
+    res.send(`El bot está despierto. Hora servidor (RD): ${ahora}. Ve a /qr para escanear.`);
 });
 
 // Ruta especial para ver el QR en el navegador
@@ -39,6 +40,12 @@ app.get('/qr', async (req, res) => {
     }
 });
 
+app.get('/forzar-envio', async (req, res) => {
+    console.log('⚠️ Se solicitó envío manual vía web');
+    await enviarLecturaDiaria();
+    res.send('✅ Proceso de envío iniciado manualmente. Revisa WhatsApp.');
+});
+
 app.listen(port, () => {
   console.log(`Servidor web listo en puerto ${port}`);
 });
@@ -49,16 +56,16 @@ app.listen(port, () => {
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
-        headless: true, // Obligatorio
+        headless: true,
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas', // Desactiva gráficos avanzados
+            '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--single-process', // Ahorra mucha RAM (aunque es menos estable, es necesario aquí)
-            '--disable-gpu' // Imprescindible en servidores sin tarjeta gráfica
+            '--single-process',
+            '--disable-gpu'
         ]
     }
 });
@@ -79,11 +86,15 @@ client.on('ready', () => {
     console.log('¡Bot conectado con éxito!');
     qrCodeImage = null; // Borramos el QR porque ya no hace falta
 
-// Programar envío: Todos los días a las 8:00 AM hora servidor
-    // Nota: Render usa hora UTC (Londres). 8:00 AM UTC son las 4:00 AM en Rep. Dom.
-    // Si quieres que sea a las 8 AM RD, pon '0 12 * * *' (12:00 UTC)
+// --- PROGRAMACIÓN ---
+    // 6:00 AM hora RD es 10:00 AM UTC.
+    // Cron usa hora del servidor (UTC en Render).
+    // Configurado para: 10:00 UTC (Minuto 0, Hora 12)
     cron.schedule('0 10 * * *', () => { 
+        console.log('⏰ Cron disparado: Iniciando envío diario...');
         enviarLecturaDiaria();
+    }, {
+        timezone: "UTC" // Aseguramos que el cron sepa que estamos usando UTC
     });
 });
 
@@ -91,49 +102,50 @@ async function enviarLecturaDiaria() {
     try {
         const data = JSON.parse(fs.readFileSync('./lecturas.json', 'utf8'));
 
-// --- FECHA DE HOY ---
-        const hoy = new Date();
-        const diaHoy = String(hoy.getDate()).padStart(2, '0');
-        const mesHoy = String(hoy.getMonth() + 1).padStart(2, '0');
-        const claveHoy = `${diaHoy}-${mesHoy}`;
-
-// --- FECHA DE MAÑANA ---
-        const manana = new Date(hoy);
-        manana.setDate(manana.getDate() + 1); // Sumar 1 día
-        const diaManana = String(manana.getDate()).padStart(2, '0');
-        const mesManana = String(manana.getMonth() + 1).padStart(2, '0');
+        // Ajustamos la fecha para que coincida con RD
+        // Usamos Intl.DateTimeFormat para obtener la fecha correcta en tu zona
+        const options = { timeZone: 'America/Santo_Domingo', year: 'numeric', month: '2-digit', day: '2-digit' };
+        const formatter = new Intl.DateTimeFormat('en-CA', options); // formato YYYY-MM-DD
+        const [year, month, day] = formatter.format(new Date()).split('-');
+const claveHoy = `${day}-${month}`;
+        
+        // Para mañana, sumamos 1 día a la fecha actual
+        const fechaManana = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Santo_Domingo"}));
+        fechaManana.setDate(fechaManana.getDate() + 1);
+        const diaManana = String(fechaManana.getDate()).padStart(2, '0');
+        const mesManana = String(fechaManana.getMonth() + 1).padStart(2, '0');
         const claveManana = `${diaManana}-${mesManana}`;
 
-        // Obtener lecturas
-        const lecturaHoy = data[claveHoy] || "No hay lectura programada";
-        const lecturaManana = data[claveManana] || "No hay lectura programada";
+        console.log(`📅 Buscando lectura para hoy: ${claveHoy} y mañana: ${claveManana}`);
 
-        if (data[claveHoy]) {
-            // Construimos el mensaje con ambas fechas
+        const lecturaHoy = data[claveHoy];
+        const lecturaManana = data[claveManana] || "Por definir";
+
+        if (lecturaHoy) {
             const mensaje = `📖 *Lectura Bíblica Diaria*\n\n` +
                             `📅 *Hoy (${claveHoy}):* ${lecturaHoy}\n` +
                             `🔜 *Mañana (${claveManana}):* ${lecturaManana}\n\n` +
-                            `_¡Que tengas un bendecido día!_`;
-        
-            // --- LISTA DE NÚMEROS A ENVIAR (SEGURO) ---
-            // Ahora leemos desde las variables de entorno
+                            `_¡Ten un buen día!_`;
+
             const destinatarios = [
                 process.env.NUMERO_UNO,
                 process.env.NUMERO_DOS
             ];
+            
             const validos = destinatarios.filter(n => n);
 
             for (const numero of validos) {
+                console.log(`Enviando a: ${numero}...`);
                 await client.sendMessage(numero, mensaje);
-                console.log(`Enviado a ${numero}`);
                 await new Promise(r => setTimeout(r, 2000));
             }
+            console.log('✅ Envío finalizado.');
+        } else {
+            console.log('❌ No hay lectura programada para hoy en el JSON.');
         }
     } catch (error) {
-        console.error('Error enviando:', error);
+        console.error('❌ Error enviando:', error);
     }
 }
 
-
 client.initialize();
-

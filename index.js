@@ -65,7 +65,10 @@ const client = new Client({
             '--no-first-run',
             '--no-zygote',
             '--single-process',
-            '--disable-gpu'
+            '--disable-gpu',
+            '--disable-extensions',
+            '--proxy-server="direct://"',
+            '--proxy-bypass-list=*'
         ]
     }
 });

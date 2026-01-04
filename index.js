@@ -1,9 +1,10 @@
 require('dotenv').config();
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const pino = require('pino');
 const fs = require('fs');
 const cron = require('node-cron');
 const express = require('express');
-const qrcode = require('qrcode'); // Librería nueva para web
+const qrcode = require('qrcode');
 
 
 
@@ -13,142 +14,131 @@ const port = process.env.PORT || 3000;
 
 // Variable global para guardar el QR actual
 let qrCodeImage = null;
+let sock; // Aquí guardaremos la conexión
 
 // --- SERVIDOR WEB ---
 app.get('/', (req, res) => {
     const ahora = new Date().toLocaleString("en-US", {timeZone: "America/Santo_Domingo"});
-    res.send(`El bot está despierto. Hora servidor (RD): ${ahora}. Ve a /qr para escanear.`);
+    res.send(`Bot Baileys Activo. Hora RD: ${ahora}. <br> <a href="/qr">Ver QR</a> <br> <a href="/forzar-envio">Forzar Envío</a>`);
 });
 
 // Ruta especial para ver el QR en el navegador
 app.get('/qr', async (req, res) => {
     if (qrCodeImage) {
         // Muestra el QR como una imagen HTML
-        res.send(`
-            <html>
-                <head><meta http-equiv="refresh" content="20"></head> <body style="display:flex; justify-content:center; align-items:center; height:100vh; background:#f0f0f0;">
-                    <div style="text-align:center;">
-                        <h1>Escanea con WhatsApp</h1>
-                        <img src="${qrCodeImage}" style="border:10px solid white; box-shadow: 0 4px 8px rgba(0,0,0,0.1);" />
-                        <p>Si cambia, la página se recargará sola.</p>
-                    </div>
-                </body>
-            </html>
-        `);
+        res.send(`<html><meta http-equiv="refresh" content="5"><body><div style="text-align:center;"><h1>Escanea con WhatsApp</h1><img src="${qrCodeImage}" /><p>Refrescando cada 5s...</p></div></body></html>`);
     } else {
-        res.send('<h1>⏳ Esperando código QR... o ya está conectado.</h1>');
+        res.send('<h1>⏳ No hay QR pendiente (o ya estás conectado).</h1>');
     }
 });
 
 app.get('/forzar-envio', async (req, res) => {
-    console.log('⚠️ Se solicitó envío manual vía web');
+    console.log('⚠️ Envío manual solicitado');
     await enviarLecturaDiaria();
-    res.send('✅ Proceso de envío iniciado manualmente. Revisa WhatsApp.');
+    res.send('✅ Envío iniciado.');
 });
 
 app.listen(port, () => {
-  console.log(`Servidor web listo en puerto ${port}`);
+    console.log(`Servidor web listo en puerto ${port}`);
 });
 
 
 
-// 1. Configuración del cliente
-const client = new Client({
-    authStrategy: new LocalAuth(),
-    puppeteer: {
-        headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--single-process',
-            '--disable-gpu',
-            '--disable-extensions',
-            '--proxy-server="direct://"',
-            '--proxy-bypass-list=*'
-        ]
-    }
-});
+// --- LÓGICA DE CONEXIÓN WHATSAPP ---
+async function connectToWhatsApp() {
+    // Usamos una carpeta local 'auth_info' para guardar la sesión
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
-client.on('qr', (qr) => {
-    // Convertimos el código de texto a una imagen Data URL para mostrar en la web
-    qrcode.toDataURL(qr, (err, url) => {
-        if (err) {
-            console.error('Error generando QR web', err);
-            return;
-        }
-        qrCodeImage = url; // Guardamos la imagen
-        console.log('Nuevo QR generado. Abre tu web en /qr para verlo.');
+    sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: true, // Imprime en logs también
+        logger: pino({ level: 'silent' }), // Evita llenar los logs de basura
+        browser: ["BibleBot", "Chrome", "1.0"]
     });
-});
 
-client.on('ready', () => {
-    console.log('¡Bot conectado con éxito!');
-    qrCodeImage = null; // Borramos el QR porque ya no hace falta
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+            // Generar imagen QR para la web
+            qrcode.toDataURL(qr, (err, url) => {
+                qrCodeImage = url;
+                console.log('⚡ Nuevo QR generado');
+            });
+        }
+
+        if (connection === 'close') {
+            qrCodeImage = null;
+            const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+            console.log('Conexión cerrada. ¿Reconectar?: ', shouldReconnect);
+            if (shouldReconnect) {
+                connectToWhatsApp(); // Bucle de reconexión
+            }
+        } else if (connection === 'open') {
+            console.log('✅ ¡CONECTADO EXITOSAMENTE A WHATSAPP!');
+            qrCodeImage = null;
+        }
+    });
+}
 
 // --- PROGRAMACIÓN ---
-    // 6:00 AM hora RD es 10:00 AM UTC.
-    // Cron usa hora del servidor (UTC en Render).
-    // Configurado para: 10:00 UTC (Minuto 0, Hora 12)
-    cron.schedule('0 10 * * *', () => { 
-        console.log('⏰ Cron disparado: Iniciando envío diario...');
-        enviarLecturaDiaria();
-    }, {
-        timezone: "UTC" // Aseguramos que el cron sepa que estamos usando UTC
-    });
-});
+// Cron a las 10:00 UTC (6 AM RD)
+cron.schedule('5 10 * * *', () => { 
+    console.log('⏰ Cron disparado.');
+    enviarLecturaDiaria();
+}, { timezone: "UTC" });
 
+// --- FUNCIÓN DE ENVÍO ---
 async function enviarLecturaDiaria() {
     try {
         const data = JSON.parse(fs.readFileSync('./lecturas.json', 'utf8'));
 
-        // Ajustamos la fecha para que coincida con RD
-        // Usamos Intl.DateTimeFormat para obtener la fecha correcta en tu zona
+        // Configuración de fecha
         const options = { timeZone: 'America/Santo_Domingo', year: 'numeric', month: '2-digit', day: '2-digit' };
-        const formatter = new Intl.DateTimeFormat('en-CA', options); // formato YYYY-MM-DD
+        const formatter = new Intl.DateTimeFormat('en-CA', options);
         const [year, month, day] = formatter.format(new Date()).split('-');
-const claveHoy = `${day}-${month}`;
-        
-        // Para mañana, sumamos 1 día a la fecha actual
+        const claveHoy = `${day}-${month}`;
+
+        // Fecha mañana
         const fechaManana = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Santo_Domingo"}));
         fechaManana.setDate(fechaManana.getDate() + 1);
         const diaManana = String(fechaManana.getDate()).padStart(2, '0');
         const mesManana = String(fechaManana.getMonth() + 1).padStart(2, '0');
         const claveManana = `${diaManana}-${mesManana}`;
 
-        console.log(`📅 Buscando lectura para hoy: ${claveHoy} y mañana: ${claveManana}`);
-
         const lecturaHoy = data[claveHoy];
         const lecturaManana = data[claveManana] || "Por definir";
 
         if (lecturaHoy) {
-            const mensaje = `📖 *Lectura Bíblica Diaria*\n\n` +
+            const mensaje = `📖 *Lectura Bíblica Diaria (R)*\n\n` +
                             `📅 *Hoy (${claveHoy}):* ${lecturaHoy}\n` +
                             `🔜 *Mañana (${claveManana}):* ${lecturaManana}\n\n` +
-                            `_¡Ten un buen día!_`;
+                            `_¡Bendiciones!_`;
 
-            const destinatarios = [
-                process.env.NUMERO_UNO,
-                process.env.NUMERO_DOS
-            ];
-            
-            const validos = destinatarios.filter(n => n);
+            // OJO: En Baileys los números llevan el sufijo @s.whatsapp.net
+            // Asegúrate que tus variables de entorno NO tengan el @c.us o @s.whatsapp.net, solo el número
+            // O limpia el número aquí:
+            const numeros = [process.env.NUMERO_UNO, process.env.NUMERO_DOS];
 
-            for (const numero of validos) {
-                console.log(`Enviando a: ${numero}...`);
-                await client.sendMessage(numero, mensaje);
+            for (let num of numeros) {
+                if(!num) continue;
+                // Limpieza del número para formato Baileys
+                const idLimpio = num.replace('@c.us', '').replace('@s.whatsapp.net', '').replace('+', '') + '@s.whatsapp.net';
+                
+                console.log(`Enviando a ${idLimpio}...`);
+                await sock.sendMessage(idLimpio, { text: mensaje });
                 await new Promise(r => setTimeout(r, 2000));
             }
-            console.log('✅ Envío finalizado.');
+            console.log('✅ Envíos terminados');
         } else {
-            console.log('❌ No hay lectura programada para hoy en el JSON.');
+            console.log('No hay lectura para hoy');
         }
-    } catch (error) {
-        console.error('❌ Error enviando:', error);
+    } catch (e) {
+        console.error('Error enviando:', e);
     }
 }
 
-client.initialize();
+// Iniciar
+connectToWhatsApp();

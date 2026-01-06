@@ -1,11 +1,17 @@
 require('dotenv').config();
-const { makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { 
+    makeWASocket, 
+    DisconnectReason, 
+    BufferJSON, 
+    initAuthCreds, 
+    fetchLatestBaileysVersion 
+} = require('@whiskeysockets/baileys');
+const mongoose = require('mongoose');
 const pino = require('pino');
 const fs = require('fs');
 const cron = require('node-cron');
 const express = require('express');
 const qrcode = require('qrcode');
-
 
 
 // --- CONFIGURACIÓN PARA RENDER (SERVIDOR WEB) ---
@@ -14,12 +20,87 @@ const port = process.env.PORT || 3000;
 
 // Variable global para guardar el QR actual
 let qrCodeImage = null;
-let sock; // Aquí guardaremos la conexión
+let sock = null; // Aquí guardaremos la conexión
+
+// --- CONFIGURACIÓN MONGODB ---
+// Definimos el esquema para guardar credenciales y claves (keys)
+const AuthSchema = new mongoose.Schema({
+    _id: String, // ID único para cada clave o 'creds'
+    data: String // Datos serializados con BufferJSON
+}, { timestamps: true });
+
+const AuthModel = mongoose.model('Auth', AuthSchema);
+
+// --- ADAPTADOR DE SESIÓN MONGODB ---
+// Este adaptador reemplaza a useMultiFileAuthState para usar la base de datos
+async function useMongoDBAuthState() {
+    const readData = async (id) => {
+        try {
+            const res = await AuthModel.findById(id);
+            if (!res) return null;
+            return JSON.parse(res.data, BufferJSON.reviver);
+        } catch (error) {
+            return null;
+        }
+    };
+
+    const writeData = async (id, data) => {
+        const str = JSON.stringify(data, BufferJSON.replacer);
+        await AuthModel.findByIdAndUpdate(id, { data: str }, { upsert: true });
+    };
+
+    const removeData = async (id) => {
+        await AuthModel.findByIdAndDelete(id);
+    };
+
+    // Inicializar credenciales o leer las existentes
+    let creds = await readData('creds');
+    if (!creds) {
+        creds = initAuthCreds();
+        await writeData('creds', creds);
+    }
+
+    return {
+        state: {
+            creds,
+            keys: {
+                get: async (type, ids) => {
+                    const data = {};
+                    await Promise.all(ids.map(async (id) => {
+                        let value = await readData(`${type}-${id}`);
+                        if (type === 'app-state-sync-key' && value) {
+                            // Corrección interna para Baileys
+                            value = value; 
+                        }
+                        data[id] = value;
+                    }));
+                    return data;
+                },
+                set: async (data) => {
+                    for (const category of Object.keys(data)) {
+                        for (const id of Object.keys(data[category])) {
+                            const value = data[category][id];
+                            const key = `${category}-${id}`;
+                            if (value) {
+                                await writeData(key, value);
+                            } else {
+                                await removeData(key);
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        saveCreds: async () => {
+            await writeData('creds', creds);
+        }
+    };
+}
 
 // --- SERVIDOR WEB ---
 app.get('/', (req, res) => {
     const ahora = new Date().toLocaleString("en-US", {timeZone: "America/Santo_Domingo"});
-    res.send(`Bot Baileys Activo. Hora RD: ${ahora}. <br> <a href="/qr">Ver QR</a> <br> <a href="/forzar-envio">Forzar Envío</a>`);
+    res.send(`Bot Baileys (MongoDB) Activo. Hora RD: ${ahora}. <br> <a href="/qr">Ver QR</a> <br> <a href="/forzar-envio">Forzar Envío</a>`);
 });
 
 // Ruta especial para ver el QR en el navegador
@@ -46,14 +127,20 @@ app.listen(port, () => {
 
 // --- LÓGICA DE CONEXIÓN WHATSAPP ---
 async function connectToWhatsApp() {
-    // Usamos una carpeta local 'auth_info' para guardar la sesión
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+    if (mongoose.connection.readyState === 0) {
+        await mongoose.connect(process.env.MONGODB_URI);
+        console.log('✅ Base de datos MongoDB lista');
+    }
+
+    const { state, saveCreds } = await useMongoDBAuthState();
+    const { version } = await fetchLatestBaileysVersion();
 
     sock = makeWASocket({
+        version,
         auth: state,
         printQRInTerminal: true, // Imprime en logs también
         logger: pino({ level: 'silent' }), // Evita llenar los logs de basura
-        browser: ["BibleBot", "Chrome", "1.0"]
+        browser: ["BibleBot Cloud", "Chrome", "1.0"]
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -71,20 +158,20 @@ async function connectToWhatsApp() {
 
         if (connection === 'close') {
             qrCodeImage = null;
-            const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('Conexión cerrada. ¿Reconectar?: ', shouldReconnect);
             if (shouldReconnect) {
                 connectToWhatsApp(); // Bucle de reconexión
             }
         } else if (connection === 'open') {
-            console.log('✅ ¡CONECTADO EXITOSAMENTE A WHATSAPP!');
+            console.log('✅ ¡CONECTADO EXITOSAMENTE A WHATSAPP! con MongoDB');
             qrCodeImage = null;
         }
     });
 }
 
 // --- PROGRAMACIÓN ---
-// Cron a las 10:00 UTC (6 AM RD)
+// Cron a las 10:05 UTC (6:05 AM RD)
 cron.schedule('5 10 * * *', () => { 
     console.log('⏰ Cron disparado.');
     enviarLecturaDiaria();
@@ -92,6 +179,12 @@ cron.schedule('5 10 * * *', () => {
 
 // --- FUNCIÓN DE ENVÍO ---
 async function enviarLecturaDiaria() {
+    // VALIDACIÓN CRUCIAL: Si sock no existe o no está listo, abortamos sin crashear
+    if (!sock || !sock.authState.creds.registered) {
+        console.error('❌ Intento de envío fallido: El bot no está conectado.');
+        return;
+    }
+
     try {
         const data = JSON.parse(fs.readFileSync('./lecturas.json', 'utf8'));
 
@@ -111,7 +204,7 @@ async function enviarLecturaDiaria() {
         const lecturaHoy = data[claveHoy];
         const lecturaManana = data[claveManana] || "Por definir";
 
-        if (lecturaHoy) {
+        if (data[claveHoy]) {
             const mensaje = `📖 *Lectura Bíblica Diaria (R)*\n\n` +
                             `📅 *Hoy (${claveHoy}):* ${lecturaHoy}\n` +
                             `🔜 *Mañana (${claveManana}):* ${lecturaManana}\n\n` +
@@ -127,8 +220,10 @@ async function enviarLecturaDiaria() {
                 // Limpieza del número para formato Baileys
                 const idLimpio = num.replace('@c.us', '').replace('@s.whatsapp.net', '').replace('+', '') + '@s.whatsapp.net';
                 
+                // VALIDACIÓN EXTRA: Verificar si el socket está abierto antes de enviar cada mensaje
                 console.log(`Enviando a ${idLimpio}...`);
                 await sock.sendMessage(idLimpio, { text: mensaje });
+                console.log(`✅ Enviado a ${idLimpio}`);
                 await new Promise(r => setTimeout(r, 2000));
             }
             console.log('✅ Envíos terminados');

@@ -179,9 +179,9 @@ cron.schedule('5 10 * * *', () => {
 
 // --- FUNCIÓN DE ENVÍO ---
 async function enviarLecturaDiaria() {
-    // VALIDACIÓN CRUCIAL: Si sock no existe o no está listo, abortamos sin crashear
-    if (!sock || !sock.authState.creds.registered) {
-        console.error('❌ Intento de envío fallido: El bot no está conectado.');
+    // NUEVA VALIDACIÓN: Si sock existe y tiene un usuario, está conectado.
+    if (!sock || !sock.user) {
+        console.error('❌ Intento de envío fallido: El bot aún no tiene un usuario vinculado.');
         return;
     }
 

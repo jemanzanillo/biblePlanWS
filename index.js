@@ -141,6 +141,9 @@ async function connectToWhatsApp() {
         printQRInTerminal: true, // Imprime en logs también
         logger: pino({ level: 'silent' }), // Evita llenar los logs de basura
         browser: ["BibleBot Cloud", "Chrome", "1.0"]
+        // AJUSTE: Ignora mensajes antiguos y sincronización pesada de historial
+        shouldSyncHistoryMessage: () => false, 
+        markOnlineOnConnect: false
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -157,11 +160,17 @@ async function connectToWhatsApp() {
         }
 
         if (connection === 'close') {
+            const reason = lastDisconnect?.error?.output?.statusCode;
+            // Si la razón es que se cerró la sesión en el celular, no reintentes
+            const debeReconectar = reason !== DisconnectReason.loggedOut;
+            
             qrCodeImage = null;
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('Conexión cerrada. ¿Reconectar?: ', shouldReconnect);
-            if (shouldReconnect) {
-                connectToWhatsApp(); // Bucle de reconexión
+            console.log(`Conexión cerrada: ${reason}. Reconectando: ${debeReconectar}`);
+            
+            if (debeReconectar) {
+            // Espera 5 segundos antes de reintentar para evitar loops
+            // Esto evita los loops infinitos y errores de Bad MAC
+            setTimeout(() => connectToWhatsApp(), 5000);
             }
         } else if (connection === 'open') {
             console.log('✅ ¡CONECTADO EXITOSAMENTE A WHATSAPP! con MongoDB');
@@ -176,6 +185,8 @@ cron.schedule('5 10 * * *', () => {
     console.log('⏰ Cron disparado.');
     enviarLecturaDiaria();
 }, { timezone: "UTC" });
+
+// let estaEnviando = false; // El cerrojo
 
 // --- FUNCIÓN DE ENVÍO ---
 async function enviarLecturaDiaria() {
@@ -236,4 +247,5 @@ async function enviarLecturaDiaria() {
 }
 
 // Iniciar
+
 connectToWhatsApp();

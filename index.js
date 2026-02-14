@@ -140,7 +140,7 @@ async function connectToWhatsApp() {
         auth: state,
         printQRInTerminal: true, // Imprime en logs también
         logger: pino({ level: 'silent' }), // Evita llenar los logs de basura
-        browser: ["BibleBot Cloud", "Chrome", "1.0"]
+        browser: ["BibleBot Cloud", "Chrome", "1.0"],
         // AJUSTE: Ignora mensajes antiguos y sincronización pesada de historial
         shouldSyncHistoryMessage: () => false, 
         markOnlineOnConnect: false
@@ -249,3 +249,4 @@ async function enviarLecturaDiaria() {
 // Iniciar
 
 connectToWhatsApp();
+

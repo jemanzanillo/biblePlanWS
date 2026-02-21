@@ -97,6 +97,17 @@ async function useMongoDBAuthState() {
     };
 }
 
+// --- 1. SERVIDOR WEB PRIORITARIO ---
+app.get('/ping', (req, res) => {
+    res.status(200).send('PONG'); // Respuesta ultra rápida
+});
+
+app.listen(port, () => {
+    console.log(`✅ Servidor web listo y escuchando en puerto ${port}`);
+    // Lanzamos WhatsApp después de que el servidor web ya esté arriba
+    connectToWhatsApp(); 
+});
+
 // --- SERVIDOR WEB ---
 app.get('/', (req, res) => {
     const ahora = new Date().toLocaleString("en-US", {timeZone: "America/Santo_Domingo"});
@@ -249,4 +260,16 @@ async function enviarLecturaDiaria() {
 // Iniciar
 
 connectToWhatsApp();
+
+const URL_APP = `https://bibleplanws.onrender.com/ping`; 
+setInterval(async () => {
+    try {
+        const fetch = (await import('node-fetch')).default; // Asegúrate de tener node-fetch instalado
+        await fetch(URL_APP);
+        console.log('📡 Auto-ping enviado para evitar hibernación.');
+    } catch (e) {
+        console.error('❌ Error en auto-ping:', e.message);
+    }
+}, 10 * 60 * 1000); // Cada 10 minutos
+
 

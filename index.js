@@ -159,7 +159,7 @@ async function connectToWhatsApp() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
@@ -176,15 +176,18 @@ async function connectToWhatsApp() {
             const debeReconectar = reason !== DisconnectReason.loggedOut;
             
             qrCodeImage = null;
-            console.log(`Conexión cerrada: ${reason}. Reconectando: ${debeReconectar}`);
+            console.log(`Conexión cerrada: (${reason}). Reconectando: ${debeReconectar}`);
             
             if (debeReconectar) {
             // Espera 5 segundos antes de reintentar para evitar loops
             // Esto evita los loops infinitos y errores de Bad MAC
-            setTimeout(() => connectToWhatsApp(), 5000);
+            // AJUSTE: Si el error es de autenticación (440 o Bad MAC), 
+            // esperamos más tiempo para no saturar el log
+            const delay = (reason === 440 || reason === 411) ? 15000 : 5000;
+            setTimeout(() => connectToWhatsApp(), delay);
             }
         } else if (connection === 'open') {
-            console.log('✅ ¡CONECTADO EXITOSAMENTE A WHATSAPP! con MongoDB');
+            console.log('✅ ¡CONECTADO EXITOSAMENTE A WHATSAPP! Sesión activa en MongoDB');
             qrCodeImage = null;
         }
     });
@@ -266,10 +269,10 @@ setInterval(async () => {
     try {
         const fetch = (await import('node-fetch')).default; // Asegúrate de tener node-fetch instalado
         await fetch(URL_APP);
-        console.log('📡 Auto-ping enviado para evitar hibernación.');
     } catch (e) {
         console.error('❌ Error en auto-ping:', e.message);
     }
 }, 10 * 60 * 1000); // Cada 10 minutos
+
 
 
